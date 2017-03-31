@@ -1,0 +1,166 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'googleauth'
+require 'googleauth/stores/file_token_store'
+require 'google/apis/calendar_v3'
+require 'holiday_jp'
+require 'date'
+require 'pp'
+require 'chronic_duration'
+
+OOB_URI = 'urn:ietf:wg:oauth:2.0:oob'
+
+class Array
+  def rolling!(*position)
+    a = position[0] || 0
+    b = position[1] || self.count-1
+    raise ArgumentError unless a.between?(0, self.count-1) && b.between?(0, self.count-1)
+
+    self.insert(a, self.delete_at(b))
+  end
+
+  def rolling(*position)
+    self.dup.rolling!(*position)
+  end
+end
+
+class Configuration < Struct.new(:escalation_rules, :calendar_name, :conditions, :term, :delimiter, :month)
+  def self.from_command_line_options
+    self.new.tap do |config|
+      opt = OptionParser.new
+      opt.on('--escalation-rules VAL') {|v| config.escalation_rules = v }
+      opt.on('--name VAL') {|v| config.calendar_name = v }
+      opt.on('--conditions VAL') {|v| config.conditions = v.split(',') }
+      opt.on('--term VAL') {|v| config.term = v }
+      opt.on('--delimiter VAL') {|v| config.delimiter = v }
+      opt.on('--month VAL') {|v| config.month = v.to_i }
+      opt.parse!(ARGV)
+
+      config.validate!
+    end
+  end
+
+  def validate!
+    members.each do |member|
+      unless self[member]
+        raise "#{member} is required."
+      end
+    end
+  end
+end
+
+class CalendarClient
+  def initialize
+    user_id = 1
+    scope = 'https://www.googleapis.com/auth/calendar'
+    client_id = Google::Auth::ClientId.from_file('client_id.json')
+    token_store = Google::Auth::Stores::FileTokenStore.new(
+      :file => 'tokens.yaml')
+    authorizer = Google::Auth::UserAuthorizer.new(client_id, scope, token_store)
+
+    @credentials = authorizer.get_credentials(user_id)
+    if @credentials.nil?
+      url = authorizer.get_authorization_url(base_url: OOB_URI )
+      puts "Open\n#{url}\n\nEnter the resulting code:"
+      code = gets
+      @credentials = authorizer.get_and_store_credentials_from_code(
+        user_id: user_id, code: code, base_url: OOB_URI)
+    end
+  end
+
+  def name2id(name)
+    client.list_calendar_lists().items.find { |cal|
+      cal.summary == name
+    }.id
+  end
+
+  def client
+    if @client.nil?
+      @client = Google::Apis::CalendarV3::CalendarService.new
+      @client.authorization = @credentials
+    end
+    @client
+  end
+
+  def insert(calendar_id, params)
+    ev = Google::Apis::CalendarV3::Event.new(
+      summary: params[:summary],
+      start: {
+        date_time: params[:start].iso8601,
+      },
+      end: {
+        date_time: params[:end].iso8601,
+      },
+    )
+    client.insert_event(calendar_id, ev)
+  end
+end
+
+def public_holiday?(day)
+  HolidayJp.holiday?(day)
+end
+
+def weekend?(day)
+  day.saturday? || day.sunday?
+end
+
+def holiday?(day)
+  public_holiday?(day) || weekend?(day)
+end
+
+def weekday?(day)
+  !holiday?(day)
+end
+
+def target_range(month)
+  start = Date.new($today.year, month)
+  start = start.next_year if $today.month > month
+  (start...start.next_month - 1).reject do |day|
+    $config.conditions.none? do |condition|
+      case condition
+      when 'holiday', 'weekday', 'weekend'
+        send("#{condition}?", day)
+      else 
+        day.send("#{condition}?")
+      end
+    end
+  end
+end
+
+
+def parse_term
+  term = $config.term.split("-")
+  start = ChronicDuration.parse(term[0] + ":00")
+  last = ChronicDuration.parse(term[1] + ":00")
+  {
+    :start => start,
+    :end => last > start ? last : last + ChronicDuration.parse('1day')
+  }
+end
+
+
+$today = Date.today
+$config = Configuration.from_command_line_options
+
+term = parse_term
+
+client = CalendarClient.new
+
+calendar_id = client.name2id($config.calendar_name)
+
+escalation_rules = $config.escalation_rules.split($config.delimiter)
+
+target_range($config.month).each do |day|
+  day = day.to_time
+  puts "start: #{(day + term[:start]).iso8601}\tend: #{day + term[:end]}"
+  client.insert(
+    calendar_id,
+    {
+      :summary => escalation_rules.join($config.delimiter),
+      :start => day + term[:start],
+      :end => day + term[:end],
+    },
+  )
+  escalation_rules.rolling!
+end
