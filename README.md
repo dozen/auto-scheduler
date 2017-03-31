@@ -22,19 +22,14 @@ JSONをダウンロードする( `client_secret_xxxx.json` )。
 カレンダーの名前はwaker
 休日が条件
 18:30から、翌日9:30まで
-4月を指定
+5月を指定
 ```
 
 ```
-./auto-scheduler -e "鈴木->松本->稲葉" -n "waker" -c "holiday" -t 18:30-9:30 -d "->" -m 4
+./auto-scheduler -e "鈴木->松本->稲葉" -n "waker" -c "holiday" -t 18:30-9:30 -d "->" -m 5
 ```
 
-Sun|Mon|Tue|Wed|Thu|Fri|Sat
-------|------|------|------|------|------|------
-**鈴木**->松本->稲葉||||||稲葉->**鈴木**->松本
-松本->稲葉->**鈴木**||||||**鈴木**->松本->稲葉
-稲葉->**鈴木**->松本||||||松本->稲葉->**鈴木**
-**鈴木**->松本->稲葉||||||稲葉->**鈴木**->松本
+![Google Calendar](https://raw.githubusercontent.com/dozen/auto-scheduler/master/doc/img/calendar.png)
 
 ## Options
 
